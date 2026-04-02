@@ -14,12 +14,12 @@ type JoinedOrderRow = {
     predicted_is_fraud: number;
     model_version: string | null;
     prediction_timestamp: string;
-  } | null;
+  }[];
   fraud_feedback: {
     actual_is_fraud: number | null;
     is_prediction_correct: number | null;
     reviewed_at: string | null;
-  } | null;
+  }[];
 };
 
 type AdminRow = {
@@ -71,6 +71,9 @@ export default function AdminPage() {
       if (qErr) throw new Error(qErr.message);
 
       const joined = (data as JoinedOrderRow[]) ?? [];
+      const pred = (o: JoinedOrderRow) => o.order_fraud_predictions?.[0] ?? null;
+      const fb = (o: JoinedOrderRow) => o.fraud_feedback?.[0] ?? null;
+
       setRows(
         joined.map((o) => ({
           order_id: o.order_id,
@@ -78,13 +81,13 @@ export default function AdminPage() {
           order_datetime: o.order_datetime,
           order_total: o.order_total,
           base_is_fraud: o.is_fraud,
-          predicted_is_fraud: o.order_fraud_predictions?.predicted_is_fraud ?? null,
-          fraud_probability: o.order_fraud_predictions?.fraud_probability ?? null,
-          model_version: o.order_fraud_predictions?.model_version ?? null,
-          prediction_timestamp: o.order_fraud_predictions?.prediction_timestamp ?? null,
-          actual_is_fraud: o.fraud_feedback?.actual_is_fraud ?? null,
-          is_prediction_correct: o.fraud_feedback?.is_prediction_correct ?? null,
-          reviewed_at: o.fraud_feedback?.reviewed_at ?? null,
+          predicted_is_fraud: pred(o)?.predicted_is_fraud ?? null,
+          fraud_probability: pred(o)?.fraud_probability ?? null,
+          model_version: pred(o)?.model_version ?? null,
+          prediction_timestamp: pred(o)?.prediction_timestamp ?? null,
+          actual_is_fraud: fb(o)?.actual_is_fraud ?? null,
+          is_prediction_correct: fb(o)?.is_prediction_correct ?? null,
+          reviewed_at: fb(o)?.reviewed_at ?? null,
         }))
       );
     } catch (e) {
