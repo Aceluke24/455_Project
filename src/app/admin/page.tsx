@@ -3,27 +3,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase";
 
-type OrderRow = {
+type JoinedOrderRow = {
   order_id: number;
   customer_id: number;
   order_datetime: string;
   order_total: number;
   is_fraud: number;
-};
-
-type PredictionRow = {
-  order_id: number;
-  fraud_probability: number;
-  predicted_is_fraud: number;
-  model_version: string | null;
-  prediction_timestamp: string;
-};
-
-type FeedbackRow = {
-  order_id: number;
-  actual_is_fraud: number | null;
-  is_prediction_correct: number | null;
-  reviewed_at: string | null;
+  order_fraud_predictions: {
+    fraud_probability: number;
+    predicted_is_fraud: number;
+    model_version: string | null;
+    prediction_timestamp: string;
+  } | null;
+  fraud_feedback: {
+    actual_is_fraud: number | null;
+    is_prediction_correct: number | null;
+    reviewed_at: string | null;
+  } | null;
 };
 
 type AdminRow = {
@@ -42,9 +38,7 @@ type AdminRow = {
 };
 
 export default function AdminPage() {
-  const [orders, setOrders] = useState<OrderRow[]>([]);
-  const [predictions, setPredictions] = useState<PredictionRow[]>([]);
-  const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
+  const [rows, setRows] = useState<AdminRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -64,33 +58,35 @@ export default function AdminPage() {
     try {
       const supabase = getSupabaseClient();
 
-      const ordersResult = await supabase
+      const { data, error: qErr } = await supabase
         .from("orders")
-        .select("order_id,customer_id,order_datetime,order_total,is_fraud")
+        .select(`
+          order_id, customer_id, order_datetime, order_total, is_fraud,
+          order_fraud_predictions(fraud_probability, predicted_is_fraud, model_version, prediction_timestamp),
+          fraud_feedback(actual_is_fraud, is_prediction_correct, reviewed_at)
+        `)
         .order("order_id", { ascending: false })
         .limit(200);
 
-      if (ordersResult.error) throw new Error(ordersResult.error.message);
-      const orderRows = (ordersResult.data as OrderRow[]) ?? [];
-      const orderIds = orderRows.map((o) => o.order_id);
+      if (qErr) throw new Error(qErr.message);
 
-      const [predictionResult, feedbackResult] = await Promise.all([
-        supabase
-          .from("order_fraud_predictions")
-          .select("order_id,fraud_probability,predicted_is_fraud,model_version,prediction_timestamp")
-          .in("order_id", orderIds),
-        supabase
-          .from("fraud_feedback")
-          .select("order_id,actual_is_fraud,is_prediction_correct,reviewed_at")
-          .in("order_id", orderIds),
-      ]);
-
-      if (predictionResult.error) throw new Error(predictionResult.error.message);
-      if (feedbackResult.error) throw new Error(feedbackResult.error.message);
-
-      setOrders(orderRows);
-      setPredictions((predictionResult.data as PredictionRow[]) ?? []);
-      setFeedback((feedbackResult.data as FeedbackRow[]) ?? []);
+      const joined = (data as JoinedOrderRow[]) ?? [];
+      setRows(
+        joined.map((o) => ({
+          order_id: o.order_id,
+          customer_id: o.customer_id,
+          order_datetime: o.order_datetime,
+          order_total: o.order_total,
+          base_is_fraud: o.is_fraud,
+          predicted_is_fraud: o.order_fraud_predictions?.predicted_is_fraud ?? null,
+          fraud_probability: o.order_fraud_predictions?.fraud_probability ?? null,
+          model_version: o.order_fraud_predictions?.model_version ?? null,
+          prediction_timestamp: o.order_fraud_predictions?.prediction_timestamp ?? null,
+          actual_is_fraud: o.fraud_feedback?.actual_is_fraud ?? null,
+          is_prediction_correct: o.fraud_feedback?.is_prediction_correct ?? null,
+          reviewed_at: o.fraud_feedback?.reviewed_at ?? null,
+        }))
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed loading admin data.");
     } finally {
@@ -101,34 +97,6 @@ export default function AdminPage() {
   useEffect(() => {
     void loadData();
   }, []);
-
-  const rows = useMemo<AdminRow[]>(() => {
-    const predictionMap = new Map<number, PredictionRow>();
-    const feedbackMap = new Map<number, FeedbackRow>();
-
-    predictions.forEach((row) => predictionMap.set(row.order_id, row));
-    feedback.forEach((row) => feedbackMap.set(row.order_id, row));
-
-    return orders.map((order) => {
-      const prediction = predictionMap.get(order.order_id);
-      const reviewed = feedbackMap.get(order.order_id);
-
-      return {
-        order_id: order.order_id,
-        customer_id: order.customer_id,
-        order_datetime: order.order_datetime,
-        order_total: order.order_total,
-        base_is_fraud: order.is_fraud,
-        predicted_is_fraud: prediction?.predicted_is_fraud ?? null,
-        fraud_probability: prediction?.fraud_probability ?? null,
-        model_version: prediction?.model_version ?? null,
-        prediction_timestamp: prediction?.prediction_timestamp ?? null,
-        actual_is_fraud: reviewed?.actual_is_fraud ?? null,
-        is_prediction_correct: reviewed?.is_prediction_correct ?? null,
-        reviewed_at: reviewed?.reviewed_at ?? null,
-      };
-    });
-  }, [orders, predictions, feedback]);
 
   /** Orders that still need a fraud decision before fulfillment (highest model risk first). */
   const verificationQueue = useMemo(() => {
