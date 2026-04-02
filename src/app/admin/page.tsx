@@ -67,7 +67,7 @@ export default function AdminPage() {
       const ordersResult = await supabase
         .from("orders")
         .select("order_id,customer_id,order_datetime,order_total,is_fraud")
-        .order("order_datetime", { ascending: false })
+        .order("order_id", { ascending: false })
         .limit(200);
 
       if (ordersResult.error) throw new Error(ordersResult.error.message);
