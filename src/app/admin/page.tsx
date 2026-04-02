@@ -50,6 +50,13 @@ export default function AdminPage() {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [scoring, setScoring] = useState(false);
   const [scoringMessage, setScoringMessage] = useState<string | null>(null);
+  const [training, setTraining] = useState(false);
+  const [trainResult, setTrainResult] = useState<{
+    threshold: number;
+    trainRows: number;
+    testRows: number;
+    metrics: { accuracy: number; precision: number; recall: number; f1: number; rocAuc: number; prAuc: number };
+  } | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -128,6 +135,26 @@ export default function AdminPage() {
       });
   }, [rows]);
 
+  const retrainModel = async () => {
+    setTraining(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/train-model", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.message ?? "Training failed.");
+      setTrainResult({
+        threshold: body.threshold,
+        trainRows: body.trainRows,
+        testRows: body.testRows,
+        metrics: body.metrics,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Training failed.");
+    } finally {
+      setTraining(false);
+    }
+  };
+
   const runScoring = async () => {
     setScoring(true);
     setScoringMessage(null);
@@ -139,14 +166,11 @@ export default function AdminPage() {
         message?: string;
         scored?: number;
         orderCount?: number;
-        pythonNote?: string;
       };
       if (!res.ok || !body.ok) {
         throw new Error(body.message ?? "Run scoring failed.");
       }
-      setScoringMessage(
-        `Scored ${body.scored ?? 0} of ${body.orderCount ?? 0} orders.${body.pythonNote ? ` ${body.pythonNote}` : ""}`
-      );
+      setScoringMessage(`Scored ${body.scored ?? 0} of ${body.orderCount ?? 0} orders.`);
       await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Run scoring failed.");
@@ -200,16 +224,37 @@ export default function AdminPage() {
       <h1>Admin · Fraud review</h1>
       <p>Run batch scoring on all orders, then work the verification queue before fulfilling high-risk orders.</p>
 
-      <div className="plain-card" style={{ marginBottom: 20 }}>
-        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>ML inference (batch)</h2>
-        <p style={{ marginTop: 0 }}>
-          Recomputes fraud scores for every order using the same model as automatic scoring, then refreshes the tables
-          below.
-        </p>
-        <button type="button" onClick={() => void runScoring()} disabled={scoring || loading}>
-          {scoring ? "Running…" : "Run scoring"}
-        </button>
-        {scoringMessage && <div className="status ok" style={{ marginTop: 12 }}>{scoringMessage}</div>}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
+        <div className="plain-card" style={{ flex: 1, minWidth: 280 }}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>1. Train / Retrain model</h2>
+          <p style={{ marginTop: 0 }}>
+            Pulls all orders + feedback from Supabase, engineers features, trains a logistic regression model,
+            and selects an optimal threshold. The model is held in memory for scoring.
+          </p>
+          <button type="button" onClick={() => void retrainModel()} disabled={training || loading}>
+            {training ? "Training…" : "Train model"}
+          </button>
+          {trainResult && (
+            <div className="status ok" style={{ marginTop: 12 }}>
+              <strong>Model trained</strong> (threshold {trainResult.threshold})<br />
+              Train: {trainResult.trainRows} rows · Test: {trainResult.testRows} rows<br />
+              Accuracy {trainResult.metrics.accuracy} · Precision {trainResult.metrics.precision} · Recall{" "}
+              {trainResult.metrics.recall} · F1 {trainResult.metrics.f1}<br />
+              ROC-AUC {trainResult.metrics.rocAuc} · PR-AUC {trainResult.metrics.prAuc}
+            </div>
+          )}
+        </div>
+
+        <div className="plain-card" style={{ flex: 1, minWidth: 280 }}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>2. Run batch scoring</h2>
+          <p style={{ marginTop: 0 }}>
+            Scores every order using the trained model (or rule-based fallback if no model is trained yet).
+          </p>
+          <button type="button" onClick={() => void runScoring()} disabled={scoring || loading}>
+            {scoring ? "Running…" : "Run scoring"}
+          </button>
+          {scoringMessage && <div className="status ok" style={{ marginTop: 12 }}>{scoringMessage}</div>}
+        </div>
       </div>
 
       {loading && <p>Loading admin table...</p>}

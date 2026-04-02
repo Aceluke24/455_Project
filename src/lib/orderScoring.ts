@@ -1,8 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { predictFraud, type OrderForPrediction } from "@/lib/fraudPredictor";
 
-export const SCORING_MODEL_NAME = "rule_based_v1";
+import { getModel } from "@/lib/ml/predictor";
+
+export const SCORING_MODEL_NAME = "fraud_pipeline_js";
 export const SCORING_MODEL_VERSION = "1.0.0";
+
+export function currentModelName(): string {
+  const m = getModel();
+  return m ? m.modelName : "rule_based_v1_fallback";
+}
 
 export type PredictOrderPayload = {
   order_id: number;
