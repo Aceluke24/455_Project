@@ -63,21 +63,6 @@ export async function upsertPredictionForOrder(
     return { error: predictionError.message };
   }
 
-  const { error: feedbackError } = await supabase.from("fraud_feedback").upsert(
-    [
-      {
-        order_id: payload.order_id,
-        predicted_is_fraud,
-        fraud_probability,
-      },
-    ],
-    { onConflict: "order_id" }
-  );
-
-  if (feedbackError) {
-    return { error: feedbackError.message };
-  }
-
   return { fraud_probability, predicted_is_fraud };
 }
 
@@ -129,10 +114,6 @@ export async function runBatchInference(supabase: SupabaseClient): Promise<
     order_id: number; fraud_probability: number; predicted_is_fraud: number;
     model_name: string; model_version: string; prediction_timestamp: string;
   }[] = [];
-  const feedbackRows: {
-    order_id: number; predicted_is_fraud: number; fraud_probability: number;
-  }[] = [];
-
   for (const row of allRows) {
     const { fraud_probability, predicted_is_fraud } = predictFraud({
       order_total: Number(row.order_total),
@@ -150,7 +131,6 @@ export async function runBatchInference(supabase: SupabaseClient): Promise<
       model_name: SCORING_MODEL_NAME, model_version: SCORING_MODEL_VERSION,
       prediction_timestamp: timestamp,
     });
-    feedbackRows.push({ order_id: row.order_id, predicted_is_fraud, fraud_probability });
   }
 
   const CHUNK = 500;
@@ -159,13 +139,6 @@ export async function runBatchInference(supabase: SupabaseClient): Promise<
       .from("order_fraud_predictions")
       .upsert(predictionRows.slice(i, i + CHUNK), { onConflict: "order_id" });
     if (pErr) return { ok: false, message: pErr.message };
-  }
-
-  for (let i = 0; i < feedbackRows.length; i += CHUNK) {
-    const { error: fErr } = await supabase
-      .from("fraud_feedback")
-      .upsert(feedbackRows.slice(i, i + CHUNK), { onConflict: "order_id" });
-    if (fErr) return { ok: false, message: fErr.message };
   }
 
   return { ok: true, scored: allRows.length, orderCount: allRows.length };
