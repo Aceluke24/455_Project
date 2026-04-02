@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 import { getServerSupabaseClient } from "@/lib/supabaseServer";
 import { runBatchInference } from "@/lib/orderScoring";
 

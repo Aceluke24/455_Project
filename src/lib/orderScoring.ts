@@ -124,10 +124,17 @@ export async function runBatchInference(supabase: SupabaseClient): Promise<
     from += pageSize;
   }
 
-  let scored = 0;
+  const timestamp = new Date().toISOString();
+  const predictionRows: {
+    order_id: number; fraud_probability: number; predicted_is_fraud: number;
+    model_name: string; model_version: string; prediction_timestamp: string;
+  }[] = [];
+  const feedbackRows: {
+    order_id: number; predicted_is_fraud: number; fraud_probability: number;
+  }[] = [];
+
   for (const row of allRows) {
-    const result = await upsertPredictionForOrder(supabase, {
-      order_id: row.order_id,
+    const { fraud_probability, predicted_is_fraud } = predictFraud({
       order_total: Number(row.order_total),
       order_subtotal: Number(row.order_subtotal),
       shipping_fee: Number(row.shipping_fee),
@@ -138,11 +145,28 @@ export async function runBatchInference(supabase: SupabaseClient): Promise<
       ip_country: row.ip_country,
       shipping_state: row.shipping_state,
     });
-    if ("error" in result) {
-      return { ok: false, message: result.error };
-    }
-    scored += 1;
+    predictionRows.push({
+      order_id: row.order_id, fraud_probability, predicted_is_fraud,
+      model_name: SCORING_MODEL_NAME, model_version: SCORING_MODEL_VERSION,
+      prediction_timestamp: timestamp,
+    });
+    feedbackRows.push({ order_id: row.order_id, predicted_is_fraud, fraud_probability });
   }
 
-  return { ok: true, scored, orderCount: allRows.length };
+  const CHUNK = 500;
+  for (let i = 0; i < predictionRows.length; i += CHUNK) {
+    const { error: pErr } = await supabase
+      .from("order_fraud_predictions")
+      .upsert(predictionRows.slice(i, i + CHUNK), { onConflict: "order_id" });
+    if (pErr) return { ok: false, message: pErr.message };
+  }
+
+  for (let i = 0; i < feedbackRows.length; i += CHUNK) {
+    const { error: fErr } = await supabase
+      .from("fraud_feedback")
+      .upsert(feedbackRows.slice(i, i + CHUNK), { onConflict: "order_id" });
+    if (fErr) return { ok: false, message: fErr.message };
+  }
+
+  return { ok: true, scored: allRows.length, orderCount: allRows.length };
 }
