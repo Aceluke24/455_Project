@@ -1,0 +1,12 @@
+.next/
+node_modules/
+out/
+*.log
+.env
+.env.local
+.env.*.local
+vercel-env.txt
+__pycache__/
+*.pyc
+ml_pipeline/artifacts/
+ml_pipeline/data/

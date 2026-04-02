@@ -1,0 +1,350 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { getSupabaseClient } from "@/lib/supabase";
+
+type OrderRow = {
+  order_id: number;
+  customer_id: number;
+  order_datetime: string;
+  order_total: number;
+  is_fraud: number;
+};
+
+type PredictionRow = {
+  order_id: number;
+  fraud_probability: number;
+  predicted_is_fraud: number;
+  model_version: string | null;
+  prediction_timestamp: string;
+};
+
+type FeedbackRow = {
+  order_id: number;
+  actual_is_fraud: number | null;
+  is_prediction_correct: number | null;
+  reviewed_at: string | null;
+};
+
+type AdminRow = {
+  order_id: number;
+  customer_id: number;
+  order_datetime: string;
+  order_total: number;
+  base_is_fraud: number;
+  predicted_is_fraud: number | null;
+  fraud_probability: number | null;
+  model_version: string | null;
+  prediction_timestamp: string | null;
+  actual_is_fraud: number | null;
+  is_prediction_correct: number | null;
+  reviewed_at: string | null;
+};
+
+export default function AdminPage() {
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [predictions, setPredictions] = useState<PredictionRow[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [scoring, setScoring] = useState(false);
+  const [scoringMessage, setScoringMessage] = useState<string | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const supabase = getSupabaseClient();
+
+      const [ordersResult, predictionResult, feedbackResult] = await Promise.all([
+        supabase
+          .from("orders")
+          .select("order_id,customer_id,order_datetime,order_total,is_fraud")
+          .order("order_id", { ascending: false })
+          .limit(200),
+        supabase
+          .from("order_fraud_predictions")
+          .select("order_id,fraud_probability,predicted_is_fraud,model_version,prediction_timestamp"),
+        supabase
+          .from("fraud_feedback")
+          .select("order_id,actual_is_fraud,is_prediction_correct,reviewed_at"),
+      ]);
+
+      if (ordersResult.error) throw new Error(ordersResult.error.message);
+      if (predictionResult.error) throw new Error(predictionResult.error.message);
+      if (feedbackResult.error) throw new Error(feedbackResult.error.message);
+
+      setOrders((ordersResult.data as OrderRow[]) ?? []);
+      setPredictions((predictionResult.data as PredictionRow[]) ?? []);
+      setFeedback((feedbackResult.data as FeedbackRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed loading admin data.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadData();
+  }, []);
+
+  const rows = useMemo<AdminRow[]>(() => {
+    const predictionMap = new Map<number, PredictionRow>();
+    const feedbackMap = new Map<number, FeedbackRow>();
+
+    predictions.forEach((row) => predictionMap.set(row.order_id, row));
+    feedback.forEach((row) => feedbackMap.set(row.order_id, row));
+
+    return orders.map((order) => {
+      const prediction = predictionMap.get(order.order_id);
+      const reviewed = feedbackMap.get(order.order_id);
+
+      return {
+        order_id: order.order_id,
+        customer_id: order.customer_id,
+        order_datetime: order.order_datetime,
+        order_total: order.order_total,
+        base_is_fraud: order.is_fraud,
+        predicted_is_fraud: prediction?.predicted_is_fraud ?? null,
+        fraud_probability: prediction?.fraud_probability ?? null,
+        model_version: prediction?.model_version ?? null,
+        prediction_timestamp: prediction?.prediction_timestamp ?? null,
+        actual_is_fraud: reviewed?.actual_is_fraud ?? null,
+        is_prediction_correct: reviewed?.is_prediction_correct ?? null,
+        reviewed_at: reviewed?.reviewed_at ?? null,
+      };
+    });
+  }, [orders, predictions, feedback]);
+
+  /** Orders that still need a fraud decision before fulfillment (highest model risk first). */
+  const verificationQueue = useMemo(() => {
+    return rows
+      .filter((r) => r.actual_is_fraud === null)
+      .sort((a, b) => {
+        const ap = a.fraud_probability ?? -1;
+        const bp = b.fraud_probability ?? -1;
+        return bp - ap;
+      });
+  }, [rows]);
+
+  const runScoring = async () => {
+    setScoring(true);
+    setScoringMessage(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/run-scoring", { method: "POST" });
+      const body = (await res.json()) as {
+        ok?: boolean;
+        message?: string;
+        scored?: number;
+        orderCount?: number;
+        pythonNote?: string;
+      };
+      if (!res.ok || !body.ok) {
+        throw new Error(body.message ?? "Run scoring failed.");
+      }
+      setScoringMessage(
+        `Scored ${body.scored ?? 0} of ${body.orderCount ?? 0} orders.${body.pythonNote ? ` ${body.pythonNote}` : ""}`
+      );
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Run scoring failed.");
+    } finally {
+      setScoring(false);
+    }
+  };
+
+  const saveActualLabel = async (order: AdminRow, actual: number) => {
+    setSavingId(order.order_id);
+    setError(null);
+    try {
+      const supabase = getSupabaseClient();
+      const is_prediction_correct =
+        order.predicted_is_fraud == null ? null : Number(order.predicted_is_fraud === actual);
+
+      const { error } = await supabase.from("fraud_feedback").upsert(
+        [
+          {
+            order_id: order.order_id,
+            predicted_is_fraud: order.predicted_is_fraud,
+            fraud_probability: order.fraud_probability,
+            actual_is_fraud: actual,
+            reviewed_by: "admin",
+            reviewed_at: new Date().toISOString(),
+            is_prediction_correct,
+          },
+        ],
+        { onConflict: "order_id" }
+      );
+
+      if (error) throw new Error(error.message);
+
+      const { error: orderUpdateError } = await supabase
+        .from("orders")
+        .update({ is_fraud: actual })
+        .eq("order_id", order.order_id);
+
+      if (orderUpdateError) throw new Error(orderUpdateError.message);
+
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed saving review.");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  return (
+    <main>
+      <h1>Admin · Fraud review</h1>
+      <p>Run batch scoring on all orders, then work the verification queue before fulfilling high-risk orders.</p>
+
+      <div className="plain-card" style={{ marginBottom: 20 }}>
+        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>ML inference (batch)</h2>
+        <p style={{ marginTop: 0 }}>
+          Recomputes fraud scores for every order using the same model as automatic scoring, then refreshes the tables
+          below.
+        </p>
+        <button type="button" onClick={() => void runScoring()} disabled={scoring || loading}>
+          {scoring ? "Running…" : "Run scoring"}
+        </button>
+        {scoringMessage && <div className="status ok" style={{ marginTop: 12 }}>{scoringMessage}</div>}
+      </div>
+
+      {loading && <p>Loading admin table...</p>}
+      {error && <div className="status error">{error}</div>}
+
+      {!loading && !error && (
+        <>
+          <h2 style={{ fontSize: "1.1rem" }}>Verification queue (pending review)</h2>
+          <p style={{ marginTop: 0 }}>
+            Orders without an &quot;actual&quot; fraud label yet, highest model probability first.
+          </p>
+          <div className="table-wrap" style={{ marginBottom: 24 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Date</th>
+                  <th>Total</th>
+                  <th>Predicted</th>
+                  <th>Probability</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {verificationQueue.map((row) => (
+                  <tr key={`q-${row.order_id}`}>
+                    <td>{row.order_id}</td>
+                    <td>{row.customer_id}</td>
+                    <td>{new Date(row.order_datetime).toLocaleString()}</td>
+                    <td>{row.order_total.toFixed(2)}</td>
+                    <td>
+                      {row.predicted_is_fraud == null
+                        ? "—"
+                        : row.predicted_is_fraud === 1
+                          ? "Fraud"
+                          : "Not fraud"}
+                    </td>
+                    <td>
+                      {row.fraud_probability == null ? "—" : `${(row.fraud_probability * 100).toFixed(1)}%`}
+                    </td>
+                    <td>
+                      <div className="actions">
+                        <button
+                          type="button"
+                          disabled={savingId === row.order_id}
+                          onClick={() => saveActualLabel(row, 0)}
+                        >
+                          Clear (not fraud)
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingId === row.order_id}
+                          onClick={() => saveActualLabel(row, 1)}
+                        >
+                          Confirm fraud
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {verificationQueue.length === 0 && (
+                  <tr>
+                    <td colSpan={7}>No orders awaiting review.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 style={{ fontSize: "1.1rem" }}>All orders · fraud detail</h2>
+          <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Date</th>
+                <th>Total</th>
+                <th>Predicted</th>
+                <th>Probability</th>
+                <th>Actual</th>
+                <th>Correct?</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.order_id}>
+                  <td>{row.order_id}</td>
+                  <td>{row.customer_id}</td>
+                  <td>{new Date(row.order_datetime).toLocaleString()}</td>
+                  <td>{row.order_total.toFixed(2)}</td>
+                  <td>
+                    {row.predicted_is_fraud == null ? "-" : row.predicted_is_fraud === 1 ? "Fraud" : "Not Fraud"}
+                  </td>
+                  <td>{row.fraud_probability == null ? "-" : `${(row.fraud_probability * 100).toFixed(1)}%`}</td>
+                  <td>{row.actual_is_fraud == null ? "-" : row.actual_is_fraud === 1 ? "Fraud" : "Not Fraud"}</td>
+                  <td>
+                    {row.is_prediction_correct == null
+                      ? "-"
+                      : row.is_prediction_correct === 1
+                        ? "Yes"
+                        : "No"}
+                  </td>
+                  <td>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        disabled={savingId === row.order_id}
+                        onClick={() => saveActualLabel(row, 0)}
+                      >
+                        Mark Not Fraud
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingId === row.order_id}
+                        onClick={() => saveActualLabel(row, 1)}
+                      >
+                        Mark Fraud
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={9}>No orders found.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        </>
+      )}
+    </main>
+  );
+}
