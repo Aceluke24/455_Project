@@ -39,8 +39,6 @@ const emptyForm = (customerId: string) => ({
   shipping_fee: "",
   tax_amount: "",
   order_total: "",
-  risk_score: "0",
-  is_fraud: "0",
 });
 
 function PlaceOrderPageInner() {
@@ -49,8 +47,6 @@ function PlaceOrderPageInner() {
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [customersError, setCustomersError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [form, setForm] = useState(() => emptyForm(""));
   const [submitting, setSubmitting] = useState(false);
@@ -96,18 +92,6 @@ function PlaceOrderPageInner() {
       cancelled = true;
     };
   }, []);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter((c) => {
-      const idMatch = String(c.customer_id).includes(q);
-      const rest = Object.values(c)
-        .filter((v) => typeof v === "string" || typeof v === "number")
-        .some((v) => String(v).toLowerCase().includes(q));
-      return idMatch || rest;
-    });
-  }, [customers, query]);
 
   const isPromoEnabled = useMemo(() => form.promo_used === "1", [form.promo_used]);
 
@@ -155,8 +139,8 @@ function PlaceOrderPageInner() {
       shipping_fee: Number(form.shipping_fee),
       tax_amount: Number(form.tax_amount),
       order_total: Number(form.order_total),
-      risk_score: Number(form.risk_score),
-      is_fraud: Number(form.is_fraud),
+      risk_score: 0,
+      is_fraud: 0,
     };
 
     let supabase;
@@ -224,54 +208,28 @@ function PlaceOrderPageInner() {
         {customersError && <div className="status error">{customersError}</div>}
 
         {!customersLoading && !customersError && (
-          <>
-            <label>
-              Search by ID or details
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="e.g. 12 or segment name"
-                style={{ width: "100%", maxWidth: 420, marginTop: 8 }}
-              />
-            </label>
-
-            <div className="table-wrap" style={{ marginTop: 12 }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Customer ID</th>
-                    <th>Details</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((row) => (
-                    <tr
-                      key={row.customer_id}
-                      style={{
-                        background:
-                          selectedCustomerId === row.customer_id ? "rgba(21, 94, 239, 0.08)" : undefined,
-                      }}
-                    >
-                      <td>{row.customer_id}</td>
-                      <td>{customerSubtitle(row)}</td>
-                      <td>
-                        <button type="button" className="btn-inline" onClick={() => selectCustomer(row.customer_id)}>
-                          {selectedCustomerId === row.customer_id ? "Selected" : "Use this customer"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {filtered.length === 0 && (
-                    <tr>
-                      <td colSpan={3}>No customers match. Import the customers table in Supabase.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
+          <label>
+            Customer
+            <select
+              value={selectedCustomerId ?? ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "") {
+                  clearCustomer();
+                } else {
+                  selectCustomer(Number(val));
+                }
+              }}
+              style={{ width: "100%", maxWidth: 420, marginTop: 8 }}
+            >
+              <option value="">— Select a customer —</option>
+              {customers.map((row) => (
+                <option key={row.customer_id} value={row.customer_id}>
+                  #{row.customer_id} — {customerSubtitle(row)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
       </section>
 
@@ -448,32 +406,6 @@ function PlaceOrderPageInner() {
                 />
               </label>
 
-              <label>
-                Risk Score*
-                <input
-                  name="risk_score"
-                  type="number"
-                  required
-                  min={0}
-                  max={100}
-                  step="0.01"
-                  value={form.risk_score}
-                  onChange={(e) => onInput("risk_score", e.target.value)}
-                />
-              </label>
-
-              <label>
-                Is Fraud*
-                <select
-                  name="is_fraud"
-                  required
-                  value={form.is_fraud}
-                  onChange={(e) => onInput("is_fraud", e.target.value)}
-                >
-                  <option value="0">0 (No)</option>
-                  <option value="1">1 (Yes)</option>
-                </select>
-              </label>
             </div>
 
             <button type="submit" disabled={submitting || selectedCustomerId == null}>

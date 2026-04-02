@@ -71,6 +71,8 @@ export interface EtlResult {
 const DROP_COLS = new Set([
   "order_id", "customer_id", "full_name", "email", "promo_code",
   "order_datetime", "ship_datetime", "created_at", "birthdate", "risk_score",
+  "actual_days", "late_delivery",
+  "billing_zip", "shipping_zip", "city", "zip_code",
 ]);
 
 export async function buildFeatureDataset(supabase: SupabaseClient): Promise<EtlResult> {
@@ -151,8 +153,6 @@ export async function buildFeatureDataset(supabase: SupabaseClient): Promise<Etl
     const itemCount = items?.item_count ?? 0;
 
     const row: FeatureRow = {
-      billing_zip: order.billing_zip,
-      shipping_zip: order.shipping_zip,
       shipping_state: order.shipping_state,
       payment_method: order.payment_method,
       device_type: order.device_type,
@@ -164,9 +164,7 @@ export async function buildFeatureDataset(supabase: SupabaseClient): Promise<Etl
       order_total: order.order_total,
 
       gender: cust?.gender ?? null,
-      city: cust?.city ?? null,
       state: cust?.state ?? null,
-      zip_code: cust?.zip_code ?? null,
       customer_segment: cust?.customer_segment ?? null,
       loyalty_tier: cust?.loyalty_tier ?? null,
       is_active: cust?.is_active ?? null,
@@ -185,8 +183,6 @@ export async function buildFeatureDataset(supabase: SupabaseClient): Promise<Etl
       shipping_method: ship?.shipping_method ?? null,
       distance_band: ship?.distance_band ?? null,
       promised_days: ship?.promised_days ?? null,
-      actual_days: ship?.actual_days ?? null,
-      late_delivery: ship?.late_delivery ?? 0,
 
       order_hour: orderDt ? orderDt.getUTCHours() : 0,
       order_dayofweek: orderDt ? orderDt.getUTCDay() : 0,
