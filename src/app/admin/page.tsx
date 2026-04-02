@@ -3,23 +3,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase";
 
+type NestedPrediction = {
+  fraud_probability: number;
+  predicted_is_fraud: number;
+  model_version: string | null;
+  prediction_timestamp: string;
+};
+
+type NestedFeedback = {
+  actual_is_fraud: number | null;
+  is_prediction_correct: number | null;
+  reviewed_at: string | null;
+};
+
 type JoinedOrderRow = {
   order_id: number;
   customer_id: number;
   order_datetime: string;
   order_total: number;
   is_fraud: number;
-  order_fraud_predictions: {
-    fraud_probability: number;
-    predicted_is_fraud: number;
-    model_version: string | null;
-    prediction_timestamp: string;
-  }[];
-  fraud_feedback: {
-    actual_is_fraud: number | null;
-    is_prediction_correct: number | null;
-    reviewed_at: string | null;
-  }[];
+  order_fraud_predictions: NestedPrediction | NestedPrediction[] | null;
+  fraud_feedback: NestedFeedback | NestedFeedback[] | null;
 };
 
 type AdminRow = {
@@ -70,9 +74,17 @@ export default function AdminPage() {
 
       if (qErr) throw new Error(qErr.message);
 
-      const joined = (data as JoinedOrderRow[]) ?? [];
-      const pred = (o: JoinedOrderRow) => o.order_fraud_predictions?.[0] ?? null;
-      const fb = (o: JoinedOrderRow) => o.fraud_feedback?.[0] ?? null;
+      const joined = (data as unknown as JoinedOrderRow[]) ?? [];
+      const pred = (o: JoinedOrderRow): NestedPrediction | null => {
+        const v = o.order_fraud_predictions;
+        if (!v) return null;
+        return Array.isArray(v) ? v[0] ?? null : v;
+      };
+      const fb = (o: JoinedOrderRow): NestedFeedback | null => {
+        const v = o.fraud_feedback;
+        if (!v) return null;
+        return Array.isArray(v) ? v[0] ?? null : v;
+      };
 
       setRows(
         joined.map((o) => ({
