@@ -64,25 +64,31 @@ export default function AdminPage() {
     try {
       const supabase = getSupabaseClient();
 
-      const [ordersResult, predictionResult, feedbackResult] = await Promise.all([
-        supabase
-          .from("orders")
-          .select("order_id,customer_id,order_datetime,order_total,is_fraud")
-          .order("order_id", { ascending: false })
-          .limit(200),
-        supabase
-          .from("order_fraud_predictions")
-          .select("order_id,fraud_probability,predicted_is_fraud,model_version,prediction_timestamp"),
-        supabase
-          .from("fraud_feedback")
-          .select("order_id,actual_is_fraud,is_prediction_correct,reviewed_at"),
-      ]);
+      const ordersResult = await supabase
+        .from("orders")
+        .select("order_id,customer_id,order_datetime,order_total,is_fraud")
+        .order("order_id", { ascending: false })
+        .limit(200);
 
       if (ordersResult.error) throw new Error(ordersResult.error.message);
+      const orderRows = (ordersResult.data as OrderRow[]) ?? [];
+      const orderIds = orderRows.map((o) => o.order_id);
+
+      const [predictionResult, feedbackResult] = await Promise.all([
+        supabase
+          .from("order_fraud_predictions")
+          .select("order_id,fraud_probability,predicted_is_fraud,model_version,prediction_timestamp")
+          .in("order_id", orderIds),
+        supabase
+          .from("fraud_feedback")
+          .select("order_id,actual_is_fraud,is_prediction_correct,reviewed_at")
+          .in("order_id", orderIds),
+      ]);
+
       if (predictionResult.error) throw new Error(predictionResult.error.message);
       if (feedbackResult.error) throw new Error(feedbackResult.error.message);
 
-      setOrders((ordersResult.data as OrderRow[]) ?? []);
+      setOrders(orderRows);
       setPredictions((predictionResult.data as PredictionRow[]) ?? []);
       setFeedback((feedbackResult.data as FeedbackRow[]) ?? []);
     } catch (e) {
